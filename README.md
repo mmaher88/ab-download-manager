@@ -65,6 +65,23 @@ scoop install extras/abdownloadmanager
 brew tap amir1376/tap && brew install --cask ab-download-manager
 ```
 
+#### AUR (for Arch Linux / CachyOS / Manjaro)
+
+The standard AUR packages are available:
+
+```bash
+yay -S ab-download-manager-bin   # prebuilt binary
+yay -S ab-download-manager-git   # build from source
+```
+
+If you have a **HiDPI display with Wayland fractional scaling** (e.g. KDE Plasma, Hyprland, Sway) and the app appears tiny or unscaled, use the patched version which includes automatic scale detection:
+
+```bash
+yay -S ab-download-manager-wayland-git   # build from source with Wayland scaling fix
+```
+
+This fixes a [known JVM limitation](https://github.com/amir1376/ab-download-manager/issues/291) where Java AWT doesn't detect Wayland fractional scaling, causing the UI to render at 1x on HiDPI displays.
+
 > ⚠️ **Warning:** This software is NOT on Google Play or other app stores unless listed here. Any version **claiming to be or related to this project** should be considered SCAM and UNSAFE.
 
 For alternative installation methods, uninstallation instructions, and more details, please refer to the [wiki](https://github.com/amir1376/ab-download-manager/wiki/) page.
