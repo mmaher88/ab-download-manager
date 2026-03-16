@@ -15,6 +15,27 @@ class YtDlpService {
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    // Detect which browser has cookies yt-dlp can use (cached after first success)
+    private val cookieBrowser: String? by lazy {
+        val browsers = listOf("firefox", "chrome", "chromium", "brave", "edge", "opera", "vivaldi")
+        for (browser in browsers) {
+            try {
+                val process = ProcessBuilder(
+                    "yt-dlp", "--cookies-from-browser", browser,
+                    "--dump-json", "--no-download", "--no-warnings",
+                    "--extractor-args", "youtube:player_client=mediaconnect,default",
+                    "https://www.youtube.com/watch?v=jNQXAC9IVRw" // shortest YouTube video
+                ).redirectErrorStream(true).start()
+                val output = process.inputStream.bufferedReader().readText()
+                process.waitFor(15, java.util.concurrent.TimeUnit.SECONDS)
+                if (process.exitValue() == 0 && output.contains("\"formats\"")) {
+                    return@lazy browser
+                }
+            } catch (_: Exception) {}
+        }
+        null // no browser cookies available, run without
+    }
+
     fun isAvailable(): Boolean {
         return try {
             val process = ProcessBuilder("yt-dlp", "--version")
@@ -29,32 +50,53 @@ class YtDlpService {
 
     suspend fun fetchVideoInfo(url: String): Result<YouTubeVideoInfo> = withContext(Dispatchers.IO) {
         runCatching {
-            val output = runCommand("yt-dlp", "--dump-json", "--no-download", "--no-warnings", url)
-            val raw = json.decodeFromString<YtDlpRawVideoInfo>(output)
-
-            val formats = raw.formats
-                .filter { it.ext != "mhtml" } // skip storyboards
-                .map { f ->
-                    YouTubeFormat(
-                        formatId = f.formatId,
-                        ext = f.ext,
-                        quality = f.formatNote ?: f.resolution ?: "unknown",
-                        width = f.width ?: 0,
-                        height = f.height ?: 0,
-                        fps = f.fps?.toInt() ?: 0,
-                        vcodec = f.vcodec ?: "none",
-                        acodec = f.acodec ?: "none",
-                        filesize = f.filesize ?: f.filesizeApprox ?: 0L,
-                    )
-                }
-
-            YouTubeVideoInfo(
-                title = raw.title,
-                uploader = raw.uploader,
-                duration = raw.duration ?: 0.0,
-                formats = formats,
-            )
+            var info = fetchVideoInfoOnce(url)
+            // YouTube sometimes returns only 360p progressive — retry up to 3 times
+            repeat(3) {
+                if (info.formats.count { it.hasVideo } > 1) return@runCatching info
+                Thread.sleep(1000)
+                info = fetchVideoInfoOnce(url)
+            }
+            info
         }
+    }
+
+    private fun ytDlpCmd(vararg args: String): Array<String> {
+        val cmd = mutableListOf("yt-dlp")
+        cookieBrowser?.let { cmd.addAll(listOf("--cookies-from-browser", it)) }
+        cmd.addAll(listOf("--extractor-args", "youtube:player_client=mediaconnect,default"))
+        cmd.addAll(args)
+        return cmd.toTypedArray()
+    }
+
+    private fun fetchVideoInfoOnce(url: String): YouTubeVideoInfo {
+        val output = runCommand(
+            *ytDlpCmd("--dump-json", "--no-download", "--no-warnings", url)
+        )
+        val raw = json.decodeFromString<YtDlpRawVideoInfo>(output)
+
+        val formats = raw.formats
+            .filter { it.ext != "mhtml" } // skip storyboards
+            .map { f ->
+                YouTubeFormat(
+                    formatId = f.formatId,
+                    ext = f.ext,
+                    quality = f.formatNote ?: f.resolution ?: "unknown",
+                    width = f.width ?: 0,
+                    height = f.height ?: 0,
+                    fps = f.fps?.toInt() ?: 0,
+                    vcodec = f.vcodec ?: "none",
+                    acodec = f.acodec ?: "none",
+                    filesize = f.filesize ?: f.filesizeApprox ?: 0L,
+                )
+            }
+
+        return YouTubeVideoInfo(
+            title = raw.title,
+            uploader = raw.uploader,
+            duration = raw.duration ?: 0.0,
+            formats = formats,
+        )
     }
 
     /**
@@ -76,14 +118,14 @@ class YtDlpService {
             } else videoFormatId
 
             val urlOutput = runCommand(
-                "yt-dlp", "-f", formatSpec, "--get-url", "--no-warnings", url
+                *ytDlpCmd("-f", formatSpec, "--get-url", "--no-warnings", url)
             )
             val urls = urlOutput.trim().lines().filter { it.isNotBlank() }
 
             // Get filename based on video format only (so extension matches selection)
             val nameOutput = runCommand(
-                "yt-dlp", "-f", videoFormatId, "--get-filename",
-                "-o", "%(title)s.%(ext)s", "--no-warnings", url
+                *ytDlpCmd("-f", videoFormatId, "--get-filename",
+                    "-o", "%(title)s.%(ext)s", "--no-warnings", url)
             )
             val filename = nameOutput.trim()
 
