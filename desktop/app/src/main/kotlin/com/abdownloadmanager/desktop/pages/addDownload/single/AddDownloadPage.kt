@@ -170,6 +170,7 @@ fun AddDownloadPage(
                     currentUrl = credentials.link,
                     setLink = ::setLink,
                     component = component,
+                    formatHint = component.integrationDescription,
                 )
             }
             Spacer(Modifier.size(24.dp))
@@ -625,11 +626,19 @@ private fun YouTubeFormatSelector(
     currentUrl: String,
     setLink: (String) -> Unit,
     component: BaseAddSingleDownloadComponent,
+    formatHint: String? = null,
 ) {
     // Remember the original YouTube URL separately from the current link
     val youtubeUrl = remember { currentUrl }
     val isYouTube = remember(youtubeUrl) { YouTubeUrlDetector.isYouTubeUrl(youtubeUrl) }
     if (!isYouTube) return
+
+    // Parse format hint from extension: "youtube:format=137"
+    val hintedFormatId = remember(formatHint) {
+        formatHint?.let {
+            Regex("""youtube:format=(\d+)""").find(it)?.groupValues?.get(1)
+        }
+    }
 
     val ytDlpService = remember { YtDlpService() }
     var videoInfo by remember { mutableStateOf<YouTubeVideoInfo?>(null) }
@@ -637,7 +646,41 @@ private fun YouTubeFormatSelector(
     var error by remember { mutableStateOf<String?>(null) }
     var selectedFormat by remember { mutableStateOf<YouTubeFormat?>(null) }
     var extracting by remember { mutableStateOf(false) }
+    var autoExtractDone by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
+
+    // Extract URLs for a given format
+    fun extractFormat(format: YouTubeFormat) {
+        selectedFormat = format
+        extracting = true
+        error = null
+        coroutineScope.launch {
+            val selector = buildFormatSelector(format)
+            ytDlpService.extractUrls(
+                url = youtubeUrl,
+                videoFormatId = selector,
+                needsMerge = format.isVideoOnly,
+                rawFormatId = format.formatId,
+            ).fold(
+                onSuccess = { extracted ->
+                    setLink(extracted.videoUrl)
+                    component.setName(extracted.filename)
+                    if (extracted.audioUrl != null) {
+                        val appComponent = org.koin.java.KoinJavaComponent.getKoin()
+                            .get<AppComponent>()
+                        appComponent.registerYouTubeAudioUrl(
+                            extracted.videoUrl, extracted.audioUrl
+                        )
+                    }
+                    extracting = false
+                },
+                onFailure = {
+                    error = it.message
+                    extracting = false
+                }
+            )
+        }
+    }
 
     LaunchedEffect(youtubeUrl) {
         loading = true
@@ -657,6 +700,22 @@ private fun YouTubeFormatSelector(
                 loading = false
             }
         )
+    }
+
+    // Auto-extract when format hint is present and formats are loaded
+    LaunchedEffect(videoInfo, hintedFormatId, autoExtractDone) {
+        val info = videoInfo ?: return@LaunchedEffect
+        val hintId = hintedFormatId ?: return@LaunchedEffect
+        if (autoExtractDone) return@LaunchedEffect
+        autoExtractDone = true
+
+        val matchedFormat = info.formats.firstOrNull { it.formatId == hintId }
+            ?: info.formats.filter { it.hasVideo }
+                .sortedByDescending { it.height }
+                .firstOrNull()
+        if (matchedFormat != null) {
+            extractFormat(matchedFormat)
+        }
     }
 
     Spacer(Modifier.size(8.dp))
@@ -738,58 +797,11 @@ private fun YouTubeFormatSelector(
                                     .clickable {
                                         expanded = false
                                         if (extracting) return@clickable
-                                        selectedFormat = format
-                                        extracting = true
-                                        error = null
-                                        coroutineScope.launch {
-                                            val selector = buildFormatSelector(format)
-                                            ytDlpService.extractUrls(
-                                                url = youtubeUrl,
-                                                videoFormatId = selector,
-                                                needsMerge = format.isVideoOnly,
-                                                rawFormatId = format.formatId,
-                                            ).fold(
-                                                onSuccess = { extracted ->
-                                                    setLink(extracted.videoUrl)
-                                                    component.setName(extracted.filename)
-                                                    if (extracted.audioUrl != null) {
-                                                        val appComponent = org.koin.java.KoinJavaComponent.getKoin()
-                                                            .get<AppComponent>()
-                                                        appComponent.registerYouTubeAudioUrl(
-                                                            extracted.videoUrl, extracted.audioUrl
-                                                        )
-                                                    }
-                                                    extracting = false
-                                                },
-                                                onFailure = {
-                                                    error = it.message
-                                                    extracting = false
-                                                }
-                                            )
-                                        }
+                                        extractFormat(format)
                                     }
                                     .padding(horizontal = 12.dp, vertical = 8.dp),
                             ) {
-                                Row(
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    modifier = Modifier.fillMaxWidth(),
-                                ) {
-                                    BasicText(
-                                        text = "${format.displayResolution}  ${format.ext.uppercase()}",
-                                        style = androidx.compose.ui.text.TextStyle(
-                                            color = LocalContentColor.current,
-                                            fontSize = myTextSizes.base,
-                                            fontWeight = FontWeight.Bold,
-                                        )
-                                    )
-                                    BasicText(
-                                        text = "${format.displayCodec}  ${format.displaySize}",
-                                        style = androidx.compose.ui.text.TextStyle(
-                                            color = LocalContentColor.current.copy(alpha = 0.6f),
-                                            fontSize = myTextSizes.sm,
-                                        )
-                                    )
-                                }
+                                YouTubeFormatRow(format)
                             }
                         }
                     }
@@ -843,6 +855,90 @@ private fun YouTubeFormatSelector(
             maxLines = 2,
         )
     }
+}
+
+@Composable
+private fun YouTubeFormatRow(format: YouTubeFormat) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        // Quality label (bold)
+        BasicText(
+            text = format.displayResolution,
+            style = androidx.compose.ui.text.TextStyle(
+                color = LocalContentColor.current,
+                fontSize = myTextSizes.base,
+                fontWeight = FontWeight.Bold,
+            )
+        )
+        // Codec badge
+        FormatBadge(
+            text = format.displayCodec.split(" + ").first(),
+            bgColor = codecBadgeColor(format.vcodec),
+            textColor = codecTextColor(format.vcodec),
+        )
+        // Container badge
+        FormatBadge(
+            text = format.ext.uppercase(),
+            bgColor = Color(0xFF1A3D1A),
+            textColor = Color(0xFF6ABA6A),
+        )
+        // FPS badge (only for high framerate)
+        if (format.hasVideo && format.fps > 30) {
+            FormatBadge(
+                text = "${format.fps}fps",
+                bgColor = Color(0xFF3D3318),
+                textColor = Color(0xFFD4A040),
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        // File size
+        BasicText(
+            text = format.displaySize,
+            style = androidx.compose.ui.text.TextStyle(
+                color = LocalContentColor.current.copy(alpha = 0.5f),
+                fontSize = myTextSizes.sm,
+            )
+        )
+    }
+}
+
+@Composable
+private fun FormatBadge(
+    text: String,
+    bgColor: Color,
+    textColor: Color,
+) {
+    Box(
+        modifier = Modifier
+            .background(bgColor, RoundedCornerShape(3.dp))
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+    ) {
+        BasicText(
+            text = text,
+            style = androidx.compose.ui.text.TextStyle(
+                color = textColor,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        )
+    }
+}
+
+private fun codecBadgeColor(vcodec: String): Color = when {
+    vcodec.startsWith("avc1") || vcodec.contains("h264", true) -> Color(0xFF1A1A3D)
+    vcodec.startsWith("av01") || vcodec.contains("av1", true) -> Color(0xFF2D1A3D)
+    vcodec.contains("vp9", true) -> Color(0xFF1A2D3D)
+    else -> Color(0xFF1A1A3D)
+}
+
+private fun codecTextColor(vcodec: String): Color = when {
+    vcodec.startsWith("avc1") || vcodec.contains("h264", true) -> Color(0xFF8888FF)
+    vcodec.startsWith("av01") || vcodec.contains("av1", true) -> Color(0xFFBB77FF)
+    vcodec.contains("vp9", true) -> Color(0xFF66AADD)
+    else -> Color(0xFF8888FF)
 }
 
 private fun buildFormatSelector(format: YouTubeFormat): String {

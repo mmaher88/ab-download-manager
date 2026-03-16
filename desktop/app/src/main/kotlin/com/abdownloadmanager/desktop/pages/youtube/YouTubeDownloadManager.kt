@@ -105,7 +105,7 @@ class YouTubeDownloadManager(
                         audio.status == DownloadStatus.Completed -> {
                             scope.launch { performMerge(video.id, audio.id, compositeId) }
                         }
-                        // One or both still downloading — monitor
+                        // One or both still downloading — monitor and merge when done
                         else -> {
                             scope.launch { monitorAndMerge(video.id, audio.id, compositeId) }
                         }
@@ -231,7 +231,7 @@ class YouTubeDownloadManager(
                     id = 0,
                     folder = folder,
                     name = audioName,
-                    downloadPage = "youtube-composite-audio:$compositeId",
+                    downloadPage = "youtube-composite-audio:video=$videoId",
                 ),
                 extraConfig = null,
                 onDuplicateStrategy = OnDuplicateStrategy.OverrideDownload,

@@ -13,6 +13,7 @@ data class AddDownloadCredentialsInUiProps(
     data class Configs(
         // don't consume it directly as it might not be a valid file name on user's current OS
         val suggestedName: String? = null,
+        val description: String? = null,
     ) {
         fun getAndFixSuggestedName(): String? {
             return suggestedName?.let(FilenameFixer::fix)

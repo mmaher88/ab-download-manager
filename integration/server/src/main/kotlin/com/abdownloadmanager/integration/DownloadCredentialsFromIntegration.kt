@@ -9,8 +9,8 @@ import kotlinx.serialization.json.Json
 sealed interface IDownloadCredentialsFromIntegration {
     val link: String
     val downloadPage: String?
-
     val suggestedName: String?
+    val description: String?
 }
 
 @SerialName("http")
@@ -20,6 +20,7 @@ data class HttpDownloadCredentialsFromIntegration(
     val headers: Map<String, String>? = null,
     override val downloadPage: String? = null,
     override val suggestedName: String? = null,
+    override val description: String? = null,
 ) : IDownloadCredentialsFromIntegration
 
 @SerialName("hls")
@@ -29,6 +30,7 @@ data class HLSDownloadCredentialsFromIntegration(
     val headers: Map<String, String>? = null,
     override val downloadPage: String? = null,
     override val suggestedName: String? = null,
+    override val description: String? = null,
 ) : IDownloadCredentialsFromIntegration
 
 @Serializable

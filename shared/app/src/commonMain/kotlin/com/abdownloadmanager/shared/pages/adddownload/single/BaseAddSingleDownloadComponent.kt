@@ -65,6 +65,7 @@ abstract class BaseAddSingleDownloadComponent(
     ContainsEffects<BaseAddSingleDownloadComponent.Effects> by supportEffects() {
     private val _shouldShowWindow = MutableStateFlow(importOptions.silentImport == null)
     override val shouldShowWindow: StateFlow<Boolean> = _shouldShowWindow.asStateFlow()
+    val integrationDescription: String? = initialCredentials.extraConfig.description
     val downloadInputsComponent = downloaderInUi.createNewDownloadInputs(
         initialFolder = appRepository.saveLocation.value,
         initialName = initialCredentials.extraConfig.getAndFixSuggestedName().orEmpty(),

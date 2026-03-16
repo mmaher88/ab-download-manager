@@ -110,6 +110,7 @@ class IntegrationHandlerImp : IntegrationHandler, KoinComponent {
                 credentials = credentials,
                 extraConfig = AddDownloadCredentialsInUiProps.Configs(
                     suggestedName = it.suggestedName,
+                    description = it.description,
                 )
             )
         }
