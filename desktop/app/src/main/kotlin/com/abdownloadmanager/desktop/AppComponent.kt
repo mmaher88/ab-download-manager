@@ -13,6 +13,8 @@ import com.abdownloadmanager.shared.pages.category.CategoryComponent
 import com.abdownloadmanager.desktop.pages.category.DesktopCategoryDialogManager
 import com.abdownloadmanager.desktop.pages.editdownload.DesktopEditDownloadComponent
 import com.abdownloadmanager.desktop.pages.enterurl.DesktopEnterNewURLComponent
+import com.abdownloadmanager.desktop.pages.youtube.YouTubeDownloadManager
+import com.abdownloadmanager.desktop.pages.youtube.YouTubeUrlDetector
 import com.abdownloadmanager.desktop.pages.checksum.DesktopFileChecksumComponent
 import com.abdownloadmanager.desktop.pages.home.HomeComponent
 import com.abdownloadmanager.desktop.pages.perhostsettings.DesktopPerHostSettingsComponent
@@ -590,6 +592,8 @@ class AppComponent(
                 onNewDownloadEvent(it)
             }
             .launchIn(scope)
+        // Boot YouTube composite download manager (scan for unmerged pairs)
+        scope.launch { youtubeDownloadManager }
 //        IntegrationPortBroadcaster.cleanOnClose()
         integration
             .integrationStatus
@@ -617,7 +621,10 @@ class AppComponent(
 
     private fun onNewDownloadEvent(it: DownloadManagerEvents) {
         if (it.context[ResumedBy]?.by !is User) {
-            //only notify events that is started by user
+            return
+        }
+        // Skip progress/completion dialogs for YouTube audio temp downloads
+        if (it.downloadItem.downloadPage?.startsWith("youtube-composite-audio:") == true) {
             return
         }
 //                or
@@ -671,6 +678,13 @@ class AppComponent(
             if (appSettings.showDownloadProgressDialog.value) {
                 openDownloadDialog(it.downloadItem.id)
             }
+            // Check if this download has a pending YouTube audio merge
+            checkAndStartYouTubeComposite(
+                downloadId = it.downloadItem.id,
+                videoUrl = it.downloadItem.link,
+                filename = it.downloadItem.name,
+                folder = it.downloadItem.folder,
+            )
         }
     }
 
@@ -1089,6 +1103,43 @@ class AppComponent(
     override fun closeEnterNewURLWindow() {
         scope.launch {
             enterNewURLWindow.dismiss()
+        }
+    }
+
+    val youtubeDownloadManager by lazy {
+        YouTubeDownloadManager(downloadSystem, scope).also { it.boot() }
+    }
+
+    // Pending YouTube audio URLs keyed by video direct URL
+    private val pendingYouTubeAudio = mutableMapOf<String, String>()
+
+    /**
+     * Register a pending audio URL for a YouTube video download.
+     * Called from the format selector in AddDownloadPage when a video-only format is chosen.
+     */
+    fun registerYouTubeAudioUrl(videoUrl: String, audioUrl: String) {
+        pendingYouTubeAudio[videoUrl] = audioUrl
+        java.io.File("/tmp/yt_merge_debug.log").appendText(
+            "REGISTER: key_len=${videoUrl.length} audio_len=${audioUrl.length}\n"
+        )
+    }
+
+    /**
+     * Called after a download is added. If there's a pending YouTube audio URL
+     * for this video URL, starts the composite audio download + merge.
+     */
+    fun checkAndStartYouTubeComposite(downloadId: Long, videoUrl: String, filename: String, folder: String) {
+        java.io.File("/tmp/yt_merge_debug.log").appendText(
+            "CHECK: id=$downloadId url_len=${videoUrl.length} pending_count=${pendingYouTubeAudio.size} match=${pendingYouTubeAudio.containsKey(videoUrl)}\n"
+        )
+        val audioUrl = pendingYouTubeAudio.remove(videoUrl) ?: return
+        scope.launch {
+            youtubeDownloadManager.startAudioAndMerge(
+                videoDownloadId = downloadId,
+                audioUrl = audioUrl,
+                folder = folder,
+                filename = filename,
+            )
         }
     }
 

@@ -254,6 +254,8 @@ abstract class BaseHomeComponent(
         val allowedList = categoryFilter?.items ?: queueFilter?.queueItems
         (activeDownloads + completeDownloads)
             .filter {
+                // Hide YouTube audio temp downloads
+                if (it.name.startsWith(".yt_audio_")) return@filter false
                 val statusAccepted = filterState.statusFilter.accept(it)
                 val itemIsInAllowedList = allowedList?.contains(it.id) ?: true
                 val searchAccepted = if (isSearching) {

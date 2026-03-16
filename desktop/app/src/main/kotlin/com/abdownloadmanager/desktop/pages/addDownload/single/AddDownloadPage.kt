@@ -34,6 +34,18 @@ import ir.amirab.util.compose.resources.myStringResource
 import ir.amirab.downloader.utils.OnDuplicateStrategy
 import ir.amirab.util.compose.asStringSource
 import java.awt.MouseInfo
+import com.abdownloadmanager.desktop.pages.youtube.YouTubeUrlDetector
+import com.abdownloadmanager.desktop.pages.youtube.YtDlpService
+import com.abdownloadmanager.desktop.pages.youtube.YouTubeFormat
+import com.abdownloadmanager.desktop.pages.youtube.YouTubeVideoInfo
+import com.abdownloadmanager.desktop.AppComponent
+import kotlinx.coroutines.launch
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import com.abdownloadmanager.shared.util.ui.LocalContentColor
+import androidx.compose.ui.window.Popup
 
 @Composable
 fun AddDownloadPage(
@@ -152,6 +164,12 @@ fun AddDownloadPage(
                         CanAddResult.InvalidFileName -> myStringResource(Res.string.invalid_file_name)
                         else -> null
                     }.takeIf { name.isNotEmpty() }
+                )
+                // YouTube format selector (only shown for YouTube URLs)
+                YouTubeFormatSelector(
+                    currentUrl = credentials.link,
+                    setLink = ::setLink,
+                    component = component,
                 )
             }
             Spacer(Modifier.size(24.dp))
@@ -600,5 +618,241 @@ private fun NameTextField(
         modifier = Modifier.fillMaxWidth(),
         errorText = errorText,
     )
+}
+
+@Composable
+private fun YouTubeFormatSelector(
+    currentUrl: String,
+    setLink: (String) -> Unit,
+    component: BaseAddSingleDownloadComponent,
+) {
+    // Remember the original YouTube URL separately from the current link
+    val youtubeUrl = remember { currentUrl }
+    val isYouTube = remember(youtubeUrl) { YouTubeUrlDetector.isYouTubeUrl(youtubeUrl) }
+    if (!isYouTube) return
+
+    val ytDlpService = remember { YtDlpService() }
+    var videoInfo by remember { mutableStateOf<YouTubeVideoInfo?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var selectedFormat by remember { mutableStateOf<YouTubeFormat?>(null) }
+    var extracting by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
+
+    LaunchedEffect(youtubeUrl) {
+        loading = true
+        error = null
+        // Clear the link so Download button is disabled while loading
+        setLink("")
+        component.setName("")
+        ytDlpService.fetchVideoInfo(youtubeUrl).fold(
+            onSuccess = { info ->
+                videoInfo = info
+                // Set video title as name, keep link empty until format selected
+                component.setName(info.title)
+                loading = false
+            },
+            onFailure = {
+                error = it.message
+                loading = false
+            }
+        )
+    }
+
+    Spacer(Modifier.size(8.dp))
+
+    if (loading) {
+        BasicText(
+            text = "Loading YouTube formats...",
+            style = androidx.compose.ui.text.TextStyle(
+                color = LocalContentColor.current.copy(alpha = 0.6f),
+                fontSize = myTextSizes.sm,
+            )
+        )
+        return
+    }
+
+    val info = videoInfo
+    if (info == null) {
+        if (error != null) {
+            BasicText(
+                text = "YouTube: $error",
+                style = androidx.compose.ui.text.TextStyle(
+                    color = myColors.error,
+                    fontSize = myTextSizes.sm,
+                )
+            )
+        }
+        return
+    }
+    val formats = remember(info) {
+        info.formats.filter { it.hasVideo }
+            .sortedByDescending { it.height }
+            .distinctBy { "${it.displayResolution}_${it.ext}" }
+    }
+
+    var expanded by remember { mutableStateOf(false) }
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        BasicText(
+            text = "Quality",
+            style = androidx.compose.ui.text.TextStyle(
+                color = LocalContentColor.current.copy(alpha = 0.6f),
+                fontSize = myTextSizes.sm,
+            )
+        )
+        Spacer(Modifier.width(8.dp))
+        Box {
+            ActionButton(
+                text = if (extracting) "Extracting..."
+                       else selectedFormat?.let { "${it.displayResolution} ${it.ext.uppercase()}" }
+                       ?: "Select quality",
+                onClick = { if (!extracting) expanded = true },
+                enabled = !extracting && formats.isNotEmpty(),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            )
+            if (expanded) {
+                Popup(
+                    alignment = Alignment.TopStart,
+                    onDismissRequest = { expanded = false },
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .width(350.dp)
+                            .heightIn(max = 300.dp)
+                            .background(myColors.surface, RoundedCornerShape(8.dp))
+                            .border(1.dp, myColors.onBackground.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+                            .padding(4.dp)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        formats.forEach { format ->
+                            val isSelected = selectedFormat == format
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(if (isSelected) myColors.primary.copy(alpha = 0.15f) else Color.Transparent)
+                                    .clickable {
+                                        expanded = false
+                                        if (extracting) return@clickable
+                                        selectedFormat = format
+                                        extracting = true
+                                        error = null
+                                        coroutineScope.launch {
+                                            val selector = buildFormatSelector(format)
+                                            ytDlpService.extractUrls(
+                                                url = youtubeUrl,
+                                                videoFormatId = selector,
+                                                needsMerge = format.isVideoOnly,
+                                                rawFormatId = format.formatId,
+                                            ).fold(
+                                                onSuccess = { extracted ->
+                                                    setLink(extracted.videoUrl)
+                                                    component.setName(extracted.filename)
+                                                    if (extracted.audioUrl != null) {
+                                                        val appComponent = org.koin.java.KoinJavaComponent.getKoin()
+                                                            .get<AppComponent>()
+                                                        appComponent.registerYouTubeAudioUrl(
+                                                            extracted.videoUrl, extracted.audioUrl
+                                                        )
+                                                    }
+                                                    extracting = false
+                                                },
+                                                onFailure = {
+                                                    error = it.message
+                                                    extracting = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                            ) {
+                                Row(
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    BasicText(
+                                        text = "${format.displayResolution}  ${format.ext.uppercase()}",
+                                        style = androidx.compose.ui.text.TextStyle(
+                                            color = LocalContentColor.current,
+                                            fontSize = myTextSizes.base,
+                                            fontWeight = FontWeight.Bold,
+                                        )
+                                    )
+                                    BasicText(
+                                        text = "${format.displayCodec}  ${format.displaySize}",
+                                        style = androidx.compose.ui.text.TextStyle(
+                                            color = LocalContentColor.current.copy(alpha = 0.6f),
+                                            fontSize = myTextSizes.sm,
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.width(4.dp))
+        // Refresh formats button
+        ActionButton(
+            text = "\u21BB",  // ↻ refresh symbol
+            onClick = {
+                loading = true
+                error = null
+                selectedFormat = null
+                setLink("")
+                coroutineScope.launch {
+                    ytDlpService.fetchVideoInfo(youtubeUrl).fold(
+                        onSuccess = { info ->
+                            videoInfo = info
+                            component.setName(info.title)
+                            loading = false
+                        },
+                        onFailure = {
+                            error = it.message
+                            loading = false
+                        }
+                    )
+                }
+            },
+            enabled = !loading && !extracting,
+            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+        )
+        if (selectedFormat == null && !extracting) {
+            Spacer(Modifier.width(4.dp))
+            BasicText(
+                text = "Select a quality to download",
+                style = androidx.compose.ui.text.TextStyle(
+                    color = myColors.error.copy(alpha = 0.7f),
+                    fontSize = myTextSizes.xs,
+                )
+            )
+        }
+    }
+    if (error != null) {
+        BasicText(
+            text = "$error",
+            style = androidx.compose.ui.text.TextStyle(
+                color = myColors.error,
+                fontSize = myTextSizes.xs,
+            ),
+            maxLines = 2,
+        )
+    }
+}
+
+private fun buildFormatSelector(format: YouTubeFormat): String {
+    if (format.hasVideo) {
+        val parts = mutableListOf<String>()
+        if (format.height > 0) parts.add("height<=${format.height}")
+        if (format.ext.isNotBlank()) parts.add("ext=${format.ext}")
+        if (format.vcodec != "none") parts.add("vcodec^=${format.vcodec.substringBefore(".")}")
+        return if (parts.isNotEmpty()) "bestvideo[${parts.joinToString("][")}]" else format.formatId
+    }
+    return format.formatId
 }
 

@@ -23,6 +23,7 @@ import com.abdownloadmanager.resources.Res
 import com.abdownloadmanager.shared.pages.adddownload.AddDownloadComponent
 import com.abdownloadmanager.shared.util.ui.icon.MyIcons
 import com.abdownloadmanager.shared.util.ui.theme.LocalUiScale
+import com.abdownloadmanager.desktop.pages.youtube.YouTubeUrlDetector
 import ir.amirab.util.compose.resources.myStringResource
 import ir.amirab.util.desktop.PlatformAppActivator
 import ir.amirab.util.desktop.screen.applyUiScale
@@ -53,8 +54,11 @@ private fun AddDownloadWindow(
     val uiScale = LocalUiScale.current
     when (addDownloadComponent) {
         is BaseAddSingleDownloadComponent -> {
-            val h = 265.applyUiScale(uiScale)
-            val w = 500.applyUiScale(uiScale)
+            val isYouTube = YouTubeUrlDetector.isYouTubeUrl(
+                addDownloadComponent.credentials.value.link
+            )
+            val h = (if (isYouTube) 340 else 265).applyUiScale(uiScale)
+            val w = (if (isYouTube) 600 else 500).applyUiScale(uiScale)
             val size = remember {
                 DpSize(
                     height = h.dp,

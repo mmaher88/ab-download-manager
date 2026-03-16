@@ -88,7 +88,10 @@ abstract class DownloadUiChecker<
         linkChecker.suggestedName
             .onEach {
                 it?.let { name ->
-                    this.name.update { name }
+                    // Only override if no name was provided (e.g. from YouTube suggested name)
+                    this.name.update { currentName ->
+                        if (currentName.isBlank()) name else currentName
+                    }
                 }
             }.launchIn(scope)
 
