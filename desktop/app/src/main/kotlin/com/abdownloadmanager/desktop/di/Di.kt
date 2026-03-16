@@ -616,7 +616,7 @@ val appModule = module {
         val appHostNameVerifier: AppHostNameVerifier = get()
         OkHttpClient
             .Builder()
-            .protocols(listOf(Protocol.HTTP_1_1))
+            .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
             .dispatcher(Dispatcher().apply {
                 //bypass limit on concurrent connections!
                 maxRequests = Int.MAX_VALUE
